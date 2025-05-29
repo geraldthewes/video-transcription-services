@@ -26,17 +26,25 @@ Create a service as a docker image that exposes this transcriber using docker. S
 
 * Create a docker compose service including the transcriber service and the embedded redis server
 
-* Make use of the OLLAMA_HOST, CACHE_EXPIRY, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_STORAGE_BUCKET  S3 keys  environment variables
+* Make use of the OLLAMA_HOST, CACHE_EXPIRY, AWS_REGION, AWS_ENDPOINT, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, S3_STORAGE_BUCKET  S3 keys  environment variables
 
 * Create FastCGI server and the uvcorn ASGI server  implementing the end points described above: transcribe, status, download, release and one called /docs to contain the auto generated documentation the API. Expose the port for the web server.
 
 ** /transcribe: Accepts a WAV file upload (UploadFile in FastAPI) 
+
+Explicitly reject non-WAV files in /transcribe (return 415 Unsupported Media Type).
+
+Limit upload file size in FastAPI (use UploadFile with max_size).
 
 If an s3 path is specified using the argument s3_path, the resulting md and json transcript will be stored in S3. The
 S3 location will be created as follows.
   
   The bucket will be the one configured in S3_STOARGE_BUCKET
   The key will be created by concatenating the word "transcriber", the clientID and the passed in s3_path seperated by '/' and the appropriate extension ".md" or ".json"
+  
+  Add validation for s3_path format (e.g., prevent leading/trailing slashes, invalid characters).
+
+  Reject s3_path values that could cause bucket traversal (e.g., ../).
 
   In S3 both the JSON and the md version of the transcript will be stored.
 
@@ -66,21 +74,31 @@ S3 location will be created as follows.
 
 And the audio is downloaded from the specified url.
 
+Add a timeout and size limit for remote downloads.
+
 Appropriate HTTP error are returned if there are issues, like not uploading data of the right type, or 200 if success.
 
 ** /status/<task_id>: Checks the task status using Celery’s AsyncResult, returning the following status: pending, processing, completed, or failed.
 
 ** /download/<task_id>?fmt=[md|json]  Download the transcribed file in JSON or markdown format. This calls fails if an s3_path was specified in the transcribe request.
 
-** /release/<task_id>  Release all files related to that task 
+** /release/<task_id>  Release all files in the results volume cache related to that task 
 
 ** /queue to return number of transcriptions jobs in the queue to be processed
 
 ** /health Health checkpoint to check status of FastAPI, Redis and Ollama
 
+  /health should verify Ollama connectivity (e.g., HTTP GET to OLLAMA_HOST/api/tags).
+
+  Include Ollama status in the response (e.g., {"fastapi": "ok", "redis": "ok", "ollama": "ok"}).
+
+
+
 * All API calls should include a clientId passed in the HTTP request header, and this meta information should be stored as well as key time stamps of the processing (upload time, transcription completion time, last download time) 
 
   the recommendation is that the meta data be stored in Redis as a JSOn blob with the taskId as a key. 
+  
+  Mount a volume for Redis data in docker-compose.yml to persist task metadata.  
 
 * Cache management is somewhat handled by the mst package, which handles caching of an individual audio transcription and management of the cached files. But the service will need to handle when the transcription was completed and handle the deletion of expired processing. Note even failed processing files should be cleared after CACHE_EXIRY seconds. The transcript stored on s3 are not deleted and management of s3 is the responsibility the client.
 
