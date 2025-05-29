@@ -86,11 +86,11 @@ Appropriate HTTP error are returned if there are issues, like not uploading data
 
 The uploaded audio and cache should be stored in a results docker volume to survive bring the service up/down or a restart.
 
-* Create the job that retrives the audios to transcribe and transcribe them. That job will need access to the host GPU and an external Ollama server. 
+* Celery jobs 
+** Create the job that retrives the audios to transcribe and transcribe them. That job will need access to the host GPU and an external Ollama server. 
   Declare all required dependencies for the job in the docker image, the assumption being the job is implemented as celery worker.  The transcription package is located here https://github.com/geraldthewes/multistep-transcriber.git, information on how to use it is in the repository. Read it.
 
- * Create a daily celery job to delete all expired files in the cache as well as the meta data in Redis.
-
+**  Create a daily celery job to delete all expired files in the cache as well as the meta data in Redis.
 
 * Use a base image of python:3.12
 
@@ -98,15 +98,6 @@ The uploaded audio and cache should be stored in a results docker volume to surv
 
 * Write documentation on how to setup and use the service. Documentation of methods should be in  the code as docstring and documentation managed using mkdocs. No code documentation should be stored in the docs folder using markdown. There should be a README.md for the service that gives a brief introduction and installation instructions.
 
-
-
-
-
-
-
-# Open Questions
-
-Update description to contain optional S3 information for storage
 
 
 
