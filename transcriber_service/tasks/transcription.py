@@ -5,9 +5,10 @@ from datetime import datetime, timezone # Added timezone for UTC consistency
 import redis
 from celery import Celery
 from celery.utils.log import get_task_logger
+
 # Assuming multistep_transcriber is installed and importable
-from multistep_transcriber.transcriber import Transcriber 
-# from multistep_transcriber.utils import save_transcript_to_file # If needed directly
+from mst import VideoTranscriber 
+from treeseg import Embeddings, ollama_embeddings
 
 # For S3
 import boto3
@@ -146,43 +147,43 @@ def transcribe_audio_task(self, task_id: str, audio_path_in_cache: str, client_i
     local_json_path = os.path.join(CACHE_DIR, output_json_filename_relative)
     local_md_path = os.path.join(CACHE_DIR, output_md_filename_relative)
 
-    try:
-        ollama_host_for_transcriber = os.getenv("OLLAMA_HOST")
-        if not ollama_host_for_transcriber:
-            logger.error(f"Task {task_id}: OLLAMA_HOST environment variable not set for transcriber.")
-            raise ValueError("OLLAMA_HOST environment variable not set for transcriber.")
+    embeddings_config = Embeddings(
+        embeddings_func=ollama_embeddings, # openai_embeddings
+        headers={}, # forOpenAI
+        model="nomic-embed-text",  # or "text-embedding-ada-002" for openai         
+        endpoint=os.getenv("OLLAMA_HOST", "")   # "https://api.openai.com/v1/embeddings"
+    )
+    config = {
+        "MIN_SEGMENT_SIZE": 10,
+        "LAMBDA_BALANCE": 0,
+        "UTTERANCE_EXPANSION_WIDTH": 3,
+        "EMBEDDINGS": embeddings_config,
+        "TEXT_KEY": "transcript"
+    }
 
+    
+    try:
         models_cache = os.path.join(CACHE_DIR, "multistep_transcriber_models")
         os.makedirs(models_cache, exist_ok=True)
         
-        # It's crucial that OLLAMA_HOST is correctly passed to or discovered by Transcriber
-        transcriber = Transcriber(models_cache_dir=models_cache, ollama_host=ollama_host_for_transcriber) 
+        transcriber = VideoTranscriber(config)
 
-        logger.info(f"Task {task_id}: Starting transcription for {audio_path_in_cache} using OLLAMA_HOST: {ollama_host_for_transcriber}")
-        
         # Ensure the input audio file actually exists before calling transcribe
         if not os.path.exists(audio_path_in_cache):
             logger.error(f"Task {task_id}: Input audio file {audio_path_in_cache} does not exist.")
             raise FileNotFoundError(f"Input audio file {audio_path_in_cache} not found for task {task_id}")
 
-        transcript_object = transcriber.transcribe(audio_path_in_cache) 
+        logger.info(f"Task {task_id}: Starting transcription for {audio_path_in_cache}")
+        
+        result, nouns_list = transcriber.transcribe_video(audio_path_in_cache)
+        print(f'Break into topics {audio_path_in_cache}')
+        # Fix max topics
+        result, headlines, summary = transcriber.topics(audio_path_in_cache, result, 25)    
+        transcriber.format_transcript(audio_path_in_cache, result, nouns_list, headlines, summary)
 
-        if hasattr(transcript_object, 'to_json_serializable_object') and hasattr(transcript_object, 'to_markdown_string'):
-            json_content = transcript_object.to_json_serializable_object()
-            md_content = transcript_object.to_markdown_string()
-            logger.info(f"Task {task_id}: Transcription result processed using specific methods.")
-        elif isinstance(transcript_object, str):
-            md_content = transcript_object
-            json_content = {"transcription_text": transcript_object, "segments": [], "metadata": "Plain text output from transcriber"}
-            logger.info(f"Task {task_id}: Transcription result is a plain string.")
-        elif isinstance(transcript_object, dict): 
-            json_content = transcript_object
-            md_content = f"```json\n{json.dumps(transcript_object, indent=2, ensure_ascii=False)}\n```"
-            logger.info(f"Task {task_id}: Transcription result is a dictionary.")
-        else: 
-            logger.warning(f"Task {task_id}: Unexpected transcript object type: {type(transcript_object)}. Converting to string.")
-            md_content = str(transcript_object)
-            json_content = {"transcription_text": md_content, "metadata": "Fallback string conversion from transcriber"}
+        # Should add some error check
+        json_content = trabscriber.retrieve_json(audio_path_in_cache)
+        md_content = transcriber.retrive_markdown(audio_path_in_cache)
 
         with open(local_json_path, "w", encoding='utf-8') as f_json:
             json.dump(json_content, f_json, indent=2, ensure_ascii=False)

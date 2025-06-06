@@ -1,17 +1,20 @@
 # Use an official Python runtime as a parent image
 FROM python:3.12
 
-# Set the working directory in the container
-WORKDIR /app
-
-# Copy the local directory contents into the container at /app
-# This will copy the entire transcriber_service package
-COPY ./transcriber_service /app/transcriber_service
 
 # Install any needed packages
 # Keeping dependencies consistent with the main app for shared modules, even if not all are strictly used by the worker.
 RUN pip install fastapi uvicorn[standard] celery redis boto3 httpx
 RUN pip install git+https://github.com/geraldthewes/multistep-transcriber.git
+
+# Set the working directory in the container
+WORKDIR /app
+
+
+# Copy the local directory contents into the container at /app
+# This will copy the entire transcriber_service package
+COPY ./transcriber_service /app/transcriber_service
+
 
 # Define environment variable for Python path if necessary, though direct app path usually works.
 # ENV PYTHONPATH "${PYTHONPATH}:/app"
