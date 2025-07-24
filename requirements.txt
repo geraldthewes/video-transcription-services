@@ -1,0 +1,19 @@
+# Core web framework
+fastapi
+uvicorn[standard]
+
+# Task queue
+celery
+redis
+
+# AWS/S3 integration
+boto3
+
+# HTTP client
+httpx
+
+# File upload handling
+python-multipart
+
+# Transcription engine (from git repository)
+git+https://github.com/geraldthewes/multistep-transcriber.git

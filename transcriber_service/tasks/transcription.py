@@ -182,8 +182,8 @@ def transcribe_audio_task(self, task_id: str, audio_path_in_cache: str, client_i
         transcriber.format_transcript(audio_path_in_cache, result, nouns_list, headlines, summary)
 
         # Should add some error check
-        json_content = trabscriber.retrieve_json(audio_path_in_cache)
-        md_content = transcriber.retrive_markdown(audio_path_in_cache)
+        json_content = transcriber.retrieve_json(audio_path_in_cache)
+        md_content = transcriber.retrieve_markdown(audio_path_in_cache)
 
         with open(local_json_path, "w", encoding='utf-8') as f_json:
             json.dump(json_content, f_json, indent=2, ensure_ascii=False)

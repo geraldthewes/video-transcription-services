@@ -1,14 +1,14 @@
 # Use an official Python runtime as a parent image
 FROM python:3.12
 
-
-# Install any needed packages specified in requirements.txt
-# For now, installing directly
-RUN pip install fastapi uvicorn[standard] celery redis boto3 python-multipart
-RUN pip install git+https://github.com/geraldthewes/multistep-transcriber.git
-
 # Set the working directory in the container
 WORKDIR /app
+
+# Copy requirements file first for better Docker layer caching
+COPY requirements.txt /app/
+
+# Install any needed packages specified in requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy the local directory contents into the container at /app
 COPY ./transcriber_service /app/transcriber_service

@@ -140,6 +140,11 @@ async def transcribe_file(
     if not client_id:
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="client_id header is required.")
     
+    # Basic file size validation (100MB limit)
+    MAX_FILE_SIZE = 100 * 1024 * 1024  # 100MB
+    if hasattr(file, 'size') and file.size and file.size > MAX_FILE_SIZE:
+        raise HTTPException(status_code=http_status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="File size exceeds 100MB limit.")
+    
     if file.content_type not in ["audio/wav", "audio/x-wav"]:
         raise HTTPException(status_code=http_status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Unsupported file type. Only WAV files are accepted.")
 
