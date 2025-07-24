@@ -133,7 +133,7 @@ def dispatch_transcription_task(task_id: str, audio_path: str, client_id: str, s
 
 @app.post("/transcribe")
 async def transcribe_file(
-    client_id: Optional[str] = Header(None),
+    client_id: Optional[str] = Header(None, alias="client_id"),
     file: UploadFile = File(...),
     s3_path: Optional[str] = Form(None)
 ):
@@ -189,7 +189,7 @@ async def transcribe_file(
 @app.post("/transcribe_url")
 async def transcribe_url_endpoint(
     request_data: TranscribeUrlRequest,
-    client_id: Optional[str] = Header(None)
+    client_id: Optional[str] = Header(None, alias="client_id")
 ):
     if not client_id:
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="client_id header is required.")
@@ -249,7 +249,7 @@ async def transcribe_url_endpoint(
 
 
 @app.get("/status/{task_id}")
-async def get_task_status(task_id: str, client_id: Optional[str] = Header(None)):
+async def get_task_status(task_id: str, client_id: Optional[str] = Header(None, alias="client_id")):
     if not redis_client:
         raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redis service not available.")
     
@@ -270,7 +270,7 @@ async def get_task_status(task_id: str, client_id: Optional[str] = Header(None))
 async def download_transcription_file(
     task_id: str,
     fmt: str = "json", # Query parameter, default "json"
-    client_id: Optional[str] = Header(None)
+    client_id: Optional[str] = Header(None, alias="client_id")
 ):
     if not redis_client:
         raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redis service not available.")
@@ -316,7 +316,7 @@ async def download_transcription_file(
 
 
 @app.delete("/release/{task_id}")
-async def release_task_resources(task_id: str, client_id: Optional[str] = Header(None)):
+async def release_task_resources(task_id: str, client_id: Optional[str] = Header(None, alias="client_id")):
     if not redis_client:
         raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redis service not available.")
 
