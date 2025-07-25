@@ -73,6 +73,19 @@ Expected response:
 }
 ```
 
+### 4. Access Interactive API Documentation
+
+FastAPI automatically provides interactive API documentation:
+
+- **Swagger UI**: http://localhost:8000/docs
+- **ReDoc**: http://localhost:8000/redoc
+
+These interfaces allow you to:
+- Browse all available endpoints
+- View request/response schemas
+- Test API calls directly from the browser
+- Download OpenAPI specifications
+
 ## API Usage
 
 ### Upload File for Transcription
@@ -229,7 +242,13 @@ celery -A transcriber_service.tasks.transcription.celery_app worker -l INFO
 
 ### API Documentation
 
-Interactive API docs available at: `http://localhost:8000/docs`
+FastAPI provides comprehensive interactive documentation:
+
+- **Swagger UI**: `http://localhost:8000/docs` - Interactive API explorer
+- **ReDoc**: `http://localhost:8000/redoc` - Clean, three-panel documentation  
+- **OpenAPI JSON**: `http://localhost:8000/openapi.json` - Machine-readable API spec
+
+Use these for development, testing, and integration planning.
 
 ## Troubleshooting
 
