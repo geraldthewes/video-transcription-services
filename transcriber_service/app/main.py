@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from typing import Optional
 import json
 from datetime import datetime
+import boto3
+from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ClientError
 
 # Initialize FastAPI app
 app = FastAPI(title="Multi-Step Transcriber Service", version="0.1.0")
@@ -94,6 +96,11 @@ class TranscribeUrlRequest(BaseModel):
     url: str
     s3_path: Optional[str] = None
 
+# Pydantic Model for /transcribe_s3
+class TranscribeS3Request(BaseModel):
+    s3_key: str
+    s3_path: Optional[str] = None
+
 # Helper function for S3 validation
 def validate_s3_settings(s3_path: Optional[str]):
     if s3_path:
@@ -107,6 +114,58 @@ def validate_s3_settings(s3_path: Optional[str]):
                 status_code=http_status.HTTP_400_BAD_REQUEST,
                 detail="Invalid s3_path format. It must not start/end with '/' or contain '..'."
             )
+
+# Helper function to sanitize filenames
+def sanitize_filename(filename: str, default: str = "audio.wav") -> str:
+    safe_filename = "".join(c if c.isalnum() or c in ['.', '_'] else '_' for c in filename)
+    safe_filename = (safe_filename[:100] if len(safe_filename) > 100 else safe_filename) or default
+    return safe_filename
+
+# Helper function to create S3 client
+def create_s3_client():
+    if not (S3_STORAGE_BUCKET and AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY):
+        raise HTTPException(
+            status_code=http_status.HTTP_501_NOT_IMPLEMENTED,
+            detail="S3 is not configured. Missing S3_STORAGE_BUCKET, AWS_ACCESS_KEY_ID, or AWS_SECRET_ACCESS_KEY."
+        )
+    
+    s3_client_params = {
+        "aws_access_key_id": AWS_ACCESS_KEY_ID,
+        "aws_secret_access_key": AWS_SECRET_ACCESS_KEY,
+    }
+    if AWS_REGION:
+        s3_client_params["region_name"] = AWS_REGION
+    if AWS_ENDPOINT: 
+        s3_client_params["endpoint_url"] = AWS_ENDPOINT
+    
+    return boto3.client("s3", **s3_client_params)
+
+# Helper function to create task metadata and dispatch transcription
+async def create_and_dispatch_transcription(
+    task_id: str,
+    client_id: str,
+    audio_file_path: str,
+    s3_path: Optional[str],
+    original_filename: str,
+    task_type: str,
+    additional_metadata: dict = None
+):
+    if redis_client:
+        metadata = {
+            "client_id": client_id,
+            "status": "PENDING_UPLOADED" if task_type == "file_upload" else "PENDING_DOWNLOADED",
+            "s3_path": s3_path,
+            "original_filename": original_filename,
+            "saved_filename": os.path.basename(audio_file_path),
+            "upload_time" if task_type == "file_upload" else "download_time": datetime.utcnow().isoformat(),
+            "task_type": task_type
+        }
+        if additional_metadata:
+            metadata.update(additional_metadata)
+        redis_client.set(f"task:{task_id}", json.dumps(metadata))
+
+    dispatch_transcription_task(task_id=task_id, audio_path=audio_file_path, client_id=client_id, s3_path=s3_path, original_filename=original_filename)
+    return {"task_id": task_id}
 
 # Celery Task Placeholder
 # from ..tasks.transcription import transcribe_audio_task # This will be the actual import later
@@ -151,39 +210,26 @@ async def transcribe_file(
     validate_s3_settings(s3_path)
 
     task_id = str(uuid.uuid4())
-    # os.makedirs(CACHE_DIR, exist_ok=True) # Already done at startup
-
-    # Sanitize filename
-    safe_filename = "".join(c if c.isalnum() or c in ['.', '_'] else '_' for c in file.filename)
-    # Prevent excessively long filenames, ensure it has some name
-    safe_filename = (safe_filename[:100] if len(safe_filename) > 100 else safe_filename) or "uploaded_audio.wav"
+    safe_filename = sanitize_filename(file.filename, "uploaded_audio.wav")
     audio_file_path = os.path.join(CACHE_DIR, f"{task_id}_{safe_filename}")
 
     try:
         with open(audio_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
     except Exception as e:
-        # Log e for server-side diagnostics
         print(f"Error saving uploaded file: {e}")
         raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not save uploaded file.")
     finally:
         file.file.close()
 
-    if redis_client:
-        metadata = {
-            "client_id": client_id,
-            "status": "PENDING_UPLOADED",
-            "s3_path": s3_path,
-            "original_filename": file.filename,
-            "saved_filename": os.path.basename(audio_file_path),
-            "upload_time": datetime.utcnow().isoformat(),
-            "task_type": "file_upload"
-        }
-        redis_client.set(f"task:{task_id}", json.dumps(metadata))
-
-    dispatch_transcription_task(task_id=task_id, audio_path=audio_file_path, client_id=client_id, s3_path=s3_path, original_filename=file.filename)
-    
-    return {"task_id": task_id}
+    return await create_and_dispatch_transcription(
+        task_id=task_id,
+        client_id=client_id,
+        audio_file_path=audio_file_path,
+        s3_path=s3_path,
+        original_filename=file.filename,
+        task_type="file_upload"
+    )
 
 
 @app.post("/transcribe_url")
@@ -197,11 +243,8 @@ async def transcribe_url_endpoint(
     validate_s3_settings(request_data.s3_path)
     
     task_id = str(uuid.uuid4())
-    # os.makedirs(CACHE_DIR, exist_ok=True) # Already done at startup
-    
     url_filename = request_data.url.split("/")[-1] if request_data.url else ""
-    safe_filename = "".join(c if c.isalnum() or c in ['.', '_'] else '_' for c in url_filename)
-    safe_filename = (safe_filename[:100] if len(safe_filename) > 100 else safe_filename) or "downloaded_audio.wav"
+    safe_filename = sanitize_filename(url_filename, "downloaded_audio.wav")
     audio_file_path = os.path.join(CACHE_DIR, f"{task_id}_{safe_filename}")
 
     try:
@@ -221,31 +264,96 @@ async def transcribe_url_endpoint(
     except httpx.TimeoutException:
         raise HTTPException(status_code=http_status.HTTP_408_REQUEST_TIMEOUT, detail="Timeout downloading audio from URL.")
     except httpx.HTTPStatusError as e:
-        # Log e.response.text for server-side diagnostics
         print(f"HTTP error downloading audio from URL {request_data.url}: {e.response.status_code} - {e.response.text}")
         raise HTTPException(status_code=e.response.status_code, detail=f"Error downloading audio from URL.")
-    except httpx.RequestError as e: # Catches other request errors like DNS resolution, connection refused
+    except httpx.RequestError as e:
         print(f"Request error downloading audio from URL {request_data.url}: {e}")
         raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"Could not connect to or download from URL.")
     except Exception as e:
         print(f"Error processing URL download {request_data.url}: {e}")
         raise HTTPException(status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not download or save audio from URL.")
 
-    if redis_client:
-        metadata = {
-            "client_id": client_id,
-            "status": "PENDING_DOWNLOADED",
-            "s3_path": request_data.s3_path,
-            "original_url": request_data.url,
-            "saved_filename": os.path.basename(audio_file_path),
-            "download_time": datetime.utcnow().isoformat(),
-            "task_type": "url_download"
-        }
-        redis_client.set(f"task:{task_id}", json.dumps(metadata))
+    return await create_and_dispatch_transcription(
+        task_id=task_id,
+        client_id=client_id,
+        audio_file_path=audio_file_path,
+        s3_path=request_data.s3_path,
+        original_filename=safe_filename,
+        task_type="url_download",
+        additional_metadata={"original_url": request_data.url}
+    )
 
-    dispatch_transcription_task(task_id=task_id, audio_path=audio_file_path, client_id=client_id, s3_path=request_data.s3_path, original_filename=safe_filename)
+
+@app.post("/transcribe_s3")
+async def transcribe_s3_endpoint(
+    request_data: TranscribeS3Request,
+    client_id: Optional[str] = Header(None, alias="client_id")
+):
+    if not client_id:
+        raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="client_id header is required.")
+
+    validate_s3_settings(request_data.s3_path)
     
-    return {"task_id": task_id}
+    # Create S3 client for downloading the input file
+    s3_client = create_s3_client()
+    
+    task_id = str(uuid.uuid4())
+    s3_filename = request_data.s3_key.split("/")[-1] if request_data.s3_key else ""
+    safe_filename = sanitize_filename(s3_filename, "s3_audio.wav")
+    audio_file_path = os.path.join(CACHE_DIR, f"{task_id}_{safe_filename}")
+
+    try:
+        # Download file from S3 to local cache
+        s3_client.download_file(S3_STORAGE_BUCKET, request_data.s3_key, audio_file_path)
+        
+        # Validate it's a WAV file by checking extension (basic validation)
+        if not request_data.s3_key.lower().endswith('.wav'):
+            os.remove(audio_file_path)  # Clean up downloaded file
+            raise HTTPException(
+                status_code=http_status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, 
+                detail=f"Unsupported file type. S3 key must end with .wav extension."
+            )
+            
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', 'Unknown')
+        if error_code == 'NoSuchKey':
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=f"S3 key '{request_data.s3_key}' not found in bucket '{S3_STORAGE_BUCKET}'."
+            )
+        elif error_code == 'NoSuchBucket':
+            raise HTTPException(
+                status_code=http_status.HTTP_404_NOT_FOUND,
+                detail=f"S3 bucket '{S3_STORAGE_BUCKET}' not found."
+            )
+        else:
+            print(f"S3 ClientError downloading {request_data.s3_key}: {e}")
+            raise HTTPException(
+                status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Error downloading file from S3: {error_code}"
+            )
+    except (NoCredentialsError, PartialCredentialsError) as e:
+        print(f"S3 credentials error: {e}")
+        raise HTTPException(
+            status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="S3 credentials error."
+        )
+    except Exception as e:
+        print(f"Error downloading S3 file {request_data.s3_key}: {e}")
+        raise HTTPException(
+            status_code=http_status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not download file from S3."
+        )
+
+    return await create_and_dispatch_transcription(
+        task_id=task_id,
+        client_id=client_id,
+        audio_file_path=audio_file_path,
+        s3_path=request_data.s3_path,
+        original_filename=safe_filename,
+        task_type="s3_download",
+        additional_metadata={"original_s3_key": request_data.s3_key}
+    )
 
 
 @app.get("/status/{task_id}")

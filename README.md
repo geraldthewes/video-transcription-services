@@ -5,7 +5,7 @@ A microservice for audio/video transcription using AI-powered topic segmentation
 ## Features
 
 - **Asynchronous Processing**: Uses Celery workers for background transcription
-- **Multiple Input Methods**: Upload files directly or provide URLs
+- **Multiple Input Methods**: Upload files directly, provide URLs, or specify S3 keys
 - **Structured Output**: Generates JSON and Markdown transcripts with topic segmentation
 - **S3 Integration**: Optional storage of results in AWS S3 or compatible storage
 - **Task Management**: Track processing status and manage file lifecycle
@@ -129,6 +129,33 @@ curl -X POST "http://localhost:8000/transcribe_url" \
 ```
 
 **Note**: The URL must be publicly accessible or use authentication mechanisms supported by standard HTTP clients (like presigned URLs for S3).
+
+### Transcribe from S3
+
+Transcribe audio files directly from S3 using the configured S3 credentials:
+
+```bash
+curl -X POST "http://localhost:8000/transcribe_s3" \
+  -H "client_id: your-client-id" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "s3_key": "path/to/audio.wav"
+  }'
+```
+
+With S3 storage for results:
+
+```bash
+curl -X POST "http://localhost:8000/transcribe_s3" \
+  -H "client_id: your-client-id" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "s3_key": "path/to/audio.wav",
+    "s3_path": "transcribed/results"
+  }'
+```
+
+**Note**: Requires S3 credentials to be configured in environment variables. The input file is downloaded from the configured S3 bucket to local cache for processing.
 
 ### Check Status
 
