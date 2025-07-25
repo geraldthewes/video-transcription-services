@@ -92,15 +92,30 @@ Response:
 
 ### Transcribe from URL
 
+Transcribe audio files from any publicly accessible URL:
+
 ```bash
 curl -X POST "http://localhost:8000/transcribe_url" \
   -H "client_id: your-client-id" \
   -H "Content-Type: application/json" \
   -d '{
-    "url": "https://example.com/audio.wav",
+    "url": "https://example.com/path/to/audio.wav"
+  }'
+```
+
+With S3 storage for results:
+
+```bash
+curl -X POST "http://localhost:8000/transcribe_url" \
+  -H "client_id: your-client-id" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "url": "https://example.com/path/to/audio.wav",
     "s3_path": "optional/path/for/results"
   }'
 ```
+
+**Note**: The URL must be publicly accessible or use authentication mechanisms supported by standard HTTP clients (like presigned URLs for S3).
 
 ### Check Status
 
