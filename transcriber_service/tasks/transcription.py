@@ -147,19 +147,30 @@ def transcribe_audio_task(self, task_id: str, audio_path_in_cache: str, client_i
     local_json_path = os.path.join(CACHE_DIR, output_json_filename_relative)
     local_md_path = os.path.join(CACHE_DIR, output_md_filename_relative)
 
-    embeddings_config = Embeddings(
-        embeddings_func=ollama_embeddings, # openai_embeddings
-        headers={}, # forOpenAI
-        model="nomic-embed-text",  # or "text-embedding-ada-002" for openai         
-        endpoint=os.getenv("OLLAMA_HOST", "")   # "https://api.openai.com/v1/embeddings"
-    )
-    config = {
-        "MIN_SEGMENT_SIZE": 10,
-        "LAMBDA_BALANCE": 0,
-        "UTTERANCE_EXPANSION_WIDTH": 3,
-        "EMBEDDINGS": embeddings_config,
-        "TEXT_KEY": "transcript"
-    }
+    # Configure embeddings with error handling
+    try:
+        ollama_host = os.getenv("OLLAMA_HOST", "")
+        logger.info(f"Task {task_id}: Configuring embeddings with Ollama host: {ollama_host}")
+        
+        embeddings_config = Embeddings(
+            embeddings_func=ollama_embeddings, # openai_embeddings
+            headers={}, # forOpenAI
+            model="nomic-embed-text",  # or "text-embedding-ada-002" for openai         
+            endpoint=ollama_host   # "https://api.openai.com/v1/embeddings"
+        )
+        
+        config = {
+            "MIN_SEGMENT_SIZE": 10,
+            "LAMBDA_BALANCE": 0,
+            "UTTERANCE_EXPANSION_WIDTH": 3,
+            "EMBEDDINGS": embeddings_config,
+            "TEXT_KEY": "transcript"
+        }
+        logger.info(f"Task {task_id}: Transcriber configuration created successfully")
+        
+    except Exception as e:
+        logger.error(f"Task {task_id}: Failed to configure embeddings: {e}")
+        raise ValueError(f"Failed to configure embeddings: {str(e)}")
 
     
     try:
@@ -168,22 +179,110 @@ def transcribe_audio_task(self, task_id: str, audio_path_in_cache: str, client_i
         
         transcriber = VideoTranscriber(config)
 
-        # Ensure the input audio file actually exists before calling transcribe
+        # Ensure the input audio file actually exists and is valid before calling transcribe
         if not os.path.exists(audio_path_in_cache):
             logger.error(f"Task {task_id}: Input audio file {audio_path_in_cache} does not exist.")
             raise FileNotFoundError(f"Input audio file {audio_path_in_cache} not found for task {task_id}")
+        
+        # Check file size and basic validation
+        file_size = os.path.getsize(audio_path_in_cache)
+        logger.info(f"Task {task_id}: Input file size: {file_size} bytes ({file_size / (1024*1024):.2f} MB)")
+        
+        if file_size == 0:
+            logger.error(f"Task {task_id}: Input audio file {audio_path_in_cache} is empty (0 bytes)")
+            raise ValueError(f"Input audio file is empty: {audio_path_in_cache}")
+        
+        if file_size < 1024:  # Less than 1KB is suspicious for an audio file
+            logger.warning(f"Task {task_id}: Input audio file {audio_path_in_cache} is very small ({file_size} bytes)")
+        
+        # Check if file is actually a WAV file (basic header check)
+        try:
+            with open(audio_path_in_cache, 'rb') as f:
+                header = f.read(12)
+                if len(header) >= 12:
+                    if header[:4] != b'RIFF' or header[8:12] != b'WAVE':
+                        logger.warning(f"Task {task_id}: File {audio_path_in_cache} may not be a valid WAV file (header check failed)")
+                else:
+                    logger.warning(f"Task {task_id}: File {audio_path_in_cache} is too small to contain valid WAV header")
+        except Exception as e:
+            logger.warning(f"Task {task_id}: Could not verify WAV header for {audio_path_in_cache}: {e}")
 
         logger.info(f"Task {task_id}: Starting transcription for {audio_path_in_cache}")
         
-        result, nouns_list = transcriber.transcribe_video(audio_path_in_cache)
-        print(f'Break into topics {audio_path_in_cache}')
-        # Fix max topics
-        result, headlines, summary = transcriber.topics(audio_path_in_cache, result, 25)    
-        transcriber.format_transcript(audio_path_in_cache, result, nouns_list, headlines, summary)
+        # Step 1: Initial transcription
+        try:
+            result, nouns_list = transcriber.transcribe_video(audio_path_in_cache)
+            logger.info(f"Task {task_id}: Initial transcription completed. Result type: {type(result)}, length: {len(result) if result else 'None'}")
+            logger.info(f"Task {task_id}: Nouns list type: {type(nouns_list)}, length: {len(nouns_list) if nouns_list else 'None'}")
+            
+            if result is None:
+                raise ValueError("Initial transcription returned None - audio file may be corrupted or empty")
+            if not result:
+                raise ValueError("Initial transcription returned empty result - audio file may contain no speech")
+                
+        except Exception as e:
+            logger.error(f"Task {task_id}: Initial transcription failed: {e}")
+            raise ValueError(f"Initial transcription failed: {str(e)}")
+        
+        # Step 2: Topic segmentation
+        try:
+            logger.info(f"Task {task_id}: Starting topic segmentation with max_topics=25")
+            result, headlines, summary = transcriber.topics(audio_path_in_cache, result, 25)
+            logger.info(f"Task {task_id}: Topic segmentation completed. Headlines: {len(headlines) if headlines else 'None'}, Summary: {type(summary)}")
+            
+            if result is None:
+                raise ValueError("Topic segmentation returned None result")
+            if headlines is None:
+                logger.warning(f"Task {task_id}: Topic segmentation returned None headlines, using empty list")
+                headlines = []
+            if summary is None:
+                logger.warning(f"Task {task_id}: Topic segmentation returned None summary, using empty string")
+                summary = ""
+                
+        except Exception as e:
+            logger.error(f"Task {task_id}: Topic segmentation failed: {e}")
+            # Try fallback with fewer topics
+            try:
+                logger.info(f"Task {task_id}: Attempting topic segmentation fallback with max_topics=5")
+                result, headlines, summary = transcriber.topics(audio_path_in_cache, result, 5)
+                logger.info(f"Task {task_id}: Fallback topic segmentation succeeded")
+                
+                if headlines is None:
+                    headlines = []
+                if summary is None:
+                    summary = ""
+                    
+            except Exception as fallback_e:
+                logger.error(f"Task {task_id}: Fallback topic segmentation also failed: {fallback_e}")
+                # Final fallback - skip topic segmentation entirely
+                logger.warning(f"Task {task_id}: Skipping topic segmentation, using basic transcript")
+                headlines = []
+                summary = "Topic segmentation failed - basic transcript only"
+        
+        # Step 3: Format transcript
+        try:
+            logger.info(f"Task {task_id}: Formatting transcript")
+            transcriber.format_transcript(audio_path_in_cache, result, nouns_list, headlines, summary)
+            logger.info(f"Task {task_id}: Transcript formatting completed")
+        except Exception as e:
+            logger.error(f"Task {task_id}: Transcript formatting failed: {e}")
+            raise ValueError(f"Transcript formatting failed: {str(e)}")
 
-        # Should add some error check
-        json_content = transcriber.retrieve_json(audio_path_in_cache)
-        md_content = transcriber.retrieve_markdown(audio_path_in_cache)
+        # Step 4: Retrieve formatted content
+        try:
+            logger.info(f"Task {task_id}: Retrieving formatted content")
+            json_content = transcriber.retrieve_json(audio_path_in_cache)
+            md_content = transcriber.retrieve_markdown(audio_path_in_cache)
+            logger.info(f"Task {task_id}: Content retrieval completed. JSON: {type(json_content)}, MD: {type(md_content)}")
+            
+            if json_content is None:
+                raise ValueError("JSON content retrieval returned None")
+            if md_content is None:
+                raise ValueError("Markdown content retrieval returned None")
+                
+        except Exception as e:
+            logger.error(f"Task {task_id}: Content retrieval failed: {e}")
+            raise ValueError(f"Content retrieval failed: {str(e)}")
 
         with open(local_json_path, "w", encoding='utf-8') as f_json:
             json.dump(json_content, f_json, indent=2, ensure_ascii=False)
