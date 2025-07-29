@@ -15,8 +15,10 @@ A microservice for audio/video transcription using AI-powered topic segmentation
 
 ### Prerequisites
 
-- Docker and Docker Compose
+- Docker and Docker Compose with GPU support (nvidia-docker or Docker with GPU support)
+- NVIDIA GPU with CUDA support (for transcription processing)
 - Ollama server running (for AI processing)
+- Hugging Face account and token (for model downloads)
 
 ### 1. Setup Environment
 
@@ -32,6 +34,10 @@ Edit `.env` with your settings:
 # Required: Ollama server for AI processing
 OLLAMA_HOST=http://ollama:11434
 
+# Required: Hugging Face token for model downloads
+# Get your token from https://huggingface.co/settings/tokens
+HF_TOKEN=hf_your_token_here
+
 # Optional: AWS S3 integration
 AWS_REGION=us-east-1
 AWS_ACCESS_KEY_ID=your_access_key
@@ -39,6 +45,12 @@ AWS_SECRET_ACCESS_KEY=your_secret_key
 S3_STORAGE_BUCKET=your_bucket_name
 AWS_ENDPOINT=  # For MinIO or custom S3 endpoints
 ```
+
+**Getting a Hugging Face Token**:
+1. Create a free account at [huggingface.co](https://huggingface.co)
+2. Go to [Settings → Access Tokens](https://huggingface.co/settings/tokens)
+3. Create a new token with "Read" permissions
+4. Copy the token and add it to your `.env` file
 
 ### 2. Start Services
 
@@ -252,6 +264,7 @@ Response includes:
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `OLLAMA_HOST` | Yes | Ollama server URL for AI processing |
+| `HF_TOKEN` | Yes | Hugging Face token for model downloads |
 | `REDIS_HOST` | No | Redis hostname (default: localhost) |
 | `REDIS_PORT` | No | Redis port (default: 6379) |
 | `CACHE_EXPIRY` | No | File retention in seconds (default: 604800 = 7 days) |
@@ -260,6 +273,23 @@ Response includes:
 | `S3_STORAGE_BUCKET` | For S3 | S3 bucket name |
 | `AWS_REGION` | For S3 | AWS region |
 | `AWS_ENDPOINT` | For S3 | Custom S3 endpoint (MinIO, etc.) |
+
+### GPU Requirements
+
+The transcription worker requires GPU support for efficient processing:
+
+- **NVIDIA GPU**: CUDA-compatible GPU required
+- **Docker GPU Support**: Install nvidia-docker or use Docker with GPU support
+- **Model Downloads**: First run will download ~2-3GB of Hugging Face models to container cache
+
+**Verifying GPU Support**:
+```bash
+# Check if nvidia-docker is available
+docker run --gpus all nvidia/cuda:11.0-base nvidia-smi
+
+# Check GPU access in worker container
+docker compose exec worker nvidia-smi
+```
 
 ### File Limits
 
@@ -318,6 +348,9 @@ Use these for development, testing, and integration planning.
 4. **S3 upload failed**: Check AWS credentials and bucket permissions
 5. **Task stuck at PENDING_CELERY_DISPATCH**: Celery worker not running or not connected
 6. **Task stuck at PROCESSING**: Check worker logs for transcription errors
+7. **Hugging Face model download failed**: Check HF_TOKEN is valid and has read permissions
+8. **GPU not accessible**: Verify nvidia-docker is installed and GPU is available
+9. **"Repo id must be in the form..." error**: Invalid HF_TOKEN or model path configuration
 
 ### Debug Workflow
 
@@ -351,6 +384,17 @@ For stuck tasks, follow this troubleshooting sequence:
 4. **Monitor queue status**:
    ```bash
    curl "http://localhost:8000/queue"
+   ```
+
+5. **Verify GPU access** (if transcription fails):
+   ```bash
+   docker compose exec worker nvidia-smi
+   ```
+
+6. **Check Hugging Face token** (if model download fails):
+   ```bash
+   # Verify token format in .env file
+   grep HF_TOKEN .env
    ```
 
 ### Status Meanings

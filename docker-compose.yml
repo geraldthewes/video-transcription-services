@@ -30,6 +30,18 @@ services:
       - REDIS_PORT=6379
       - CACHE_DIR=/app/cache
       - CACHE_EXPIRY=604800
+      # Hugging Face environment variables
+      - HF_HOME=/app/.cache/huggingface
+      - TRANSFORMERS_CACHE=/app/.cache/huggingface/transformers
+      - HF_DATASETS_CACHE=/app/.cache/huggingface/datasets
+    # GPU support - requires nvidia-docker or Docker with GPU support
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   redis:
     image: redis:alpine
