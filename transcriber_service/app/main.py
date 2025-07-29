@@ -13,6 +13,17 @@ import json
 from datetime import datetime
 import boto3
 from botocore.exceptions import NoCredentialsError, PartialCredentialsError, ClientError
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
 app = FastAPI(title="Multi-Step Transcriber Service", version="0.1.0")
@@ -36,14 +47,17 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 redis_client = None
 initial_redis_status = "uninitialized"
 
+logger.info(f"Attempting to connect to Redis at {REDIS_HOST}:{REDIS_PORT}")
 try:
     # Explicitly connect and decode responses
     redis_client_instance = redis.Redis(host=REDIS_HOST, port=REDIS_PORT, socket_connect_timeout=1, decode_responses=True)
     redis_client_instance.ping()
     redis_client = redis_client_instance # Assign to global if successful
     initial_redis_status = "ok"
+    logger.info(f"Successfully connected to Redis at {REDIS_HOST}:{REDIS_PORT}")
 except redis.exceptions.ConnectionError as e:
     initial_redis_status = f"error: {str(e)}"
+    logger.error(f"Failed to connect to Redis at {REDIS_HOST}:{REDIS_PORT}: {e}")
     # redis_client remains None
 
 
@@ -85,10 +99,31 @@ async def health_check():
         current_redis_status = "error: not initialized"
 
 
+    # Check Celery worker status
+    celery_status = "not_available"
+    if CELERY_AVAILABLE and transcribe_audio_task:
+        try:
+            # Try to get worker stats
+            from celery import current_app
+            inspect = current_app.control.inspect()
+            active_workers = inspect.active()
+            if active_workers:
+                celery_status = "ok"
+                logger.info(f"Celery workers active: {list(active_workers.keys())}")
+            else:
+                celery_status = "no_workers"
+                logger.warning("No active Celery workers found")
+        except Exception as e:
+            celery_status = f"error: {str(e)}"
+            logger.error(f"Error checking Celery worker status: {e}")
+    else:
+        celery_status = "not_imported"
+
     return {
         "fastapi": "ok",
         "redis": current_redis_status,
-        "ollama": ollama_current_status
+        "ollama": ollama_current_status,
+        "celery": celery_status
     }
 
 # Pydantic Model for /transcribe_url
@@ -150,6 +185,8 @@ async def create_and_dispatch_transcription(
     task_type: str,
     additional_metadata: dict = None
 ):
+    logger.info(f"Creating transcription task: task_id={task_id}, client_id={client_id}, task_type={task_type}, s3_path={s3_path}")
+    
     if redis_client:
         metadata = {
             "client_id": client_id,
@@ -162,32 +199,85 @@ async def create_and_dispatch_transcription(
         }
         if additional_metadata:
             metadata.update(additional_metadata)
-        redis_client.set(f"task:{task_id}", json.dumps(metadata))
+        
+        try:
+            redis_client.set(f"task:{task_id}", json.dumps(metadata))
+            logger.info(f"Stored initial metadata in Redis for task {task_id}")
+        except Exception as e:
+            logger.error(f"Failed to store metadata in Redis for task {task_id}: {e}")
+    else:
+        logger.warning(f"Redis client not available, cannot store metadata for task {task_id}")
 
-    dispatch_transcription_task(task_id=task_id, audio_path=audio_file_path, client_id=client_id, s3_path=s3_path, original_filename=original_filename)
+    dispatch_result = dispatch_transcription_task(task_id=task_id, audio_path=audio_file_path, client_id=client_id, s3_path=s3_path, original_filename=original_filename)
+    logger.info(f"Dispatch result for task {task_id}: {dispatch_result}")
     return {"task_id": task_id}
 
-# Celery Task Placeholder
-# from ..tasks.transcription import transcribe_audio_task # This will be the actual import later
-def dispatch_transcription_task(task_id: str, audio_path: str, client_id: str, s3_path: Optional[str] = None, original_filename: Optional[str] = None):
-    print(f"Dispatching Celery task (placeholder): task_id={task_id}, audio_path={audio_path}, client_id={client_id}, s3_path={s3_path}, original_filename={original_filename}")
-    # This is a placeholder. Actual Celery integration will involve task.delay() or task.apply_async()
-    # and would return an AsyncResult-like object. For now, just return a dict.
-    
-    # Simulate initial status update in Redis that Celery worker would do
-    if redis_client:
-        metadata_key = f"task:{task_id}"
-        raw_metadata = redis_client.get(metadata_key)
-        if raw_metadata:
-            metadata = json.loads(raw_metadata)
-            metadata["status"] = "PENDING_CELERY_DISPATCH" # More accurate status after dispatch call
-            metadata["celery_dispatch_time"] = datetime.utcnow().isoformat()
-            redis_client.set(metadata_key, json.dumps(metadata))
-        else:
-            # This case should ideally not happen if called after initial metadata set
-            print(f"Warning: No initial metadata found in Redis for task {task_id} during dispatch.")
+# Import Celery task
+try:
+    from ..tasks.transcription import transcribe_audio_task
+    logger.info("Successfully imported Celery transcription task")
+    CELERY_AVAILABLE = True
+except ImportError as e:
+    logger.error(f"Failed to import Celery transcription task: {e}")
+    transcribe_audio_task = None
+    CELERY_AVAILABLE = False
 
-    return {"task_id": task_id, "status": "PENDING_CELERY_PLACEHOLDER"}
+def dispatch_transcription_task(task_id: str, audio_path: str, client_id: str, s3_path: Optional[str] = None, original_filename: Optional[str] = None):
+    logger.info(f"Dispatching transcription task: task_id={task_id}, audio_path={audio_path}, client_id={client_id}, s3_path={s3_path}, original_filename={original_filename}")
+    
+    if not CELERY_AVAILABLE or transcribe_audio_task is None:
+        logger.error(f"Celery task not available for task {task_id}")
+        if redis_client:
+            metadata_key = f"task:{task_id}"
+            raw_metadata = redis_client.get(metadata_key)
+            if raw_metadata:
+                metadata = json.loads(raw_metadata)
+                metadata["status"] = "FAILED"
+                metadata["error_message"] = "Celery worker not available"
+                metadata["celery_dispatch_time"] = datetime.utcnow().isoformat()
+                redis_client.set(metadata_key, json.dumps(metadata))
+        return {"task_id": task_id, "status": "FAILED", "error": "Celery worker not available"}
+    
+    try:
+        # Dispatch actual Celery task
+        celery_result = transcribe_audio_task.delay(
+            task_id=task_id,
+            audio_path_in_cache=audio_path,
+            client_id=client_id,
+            s3_path_suffix=s3_path,
+            original_filename=original_filename
+        )
+        
+        logger.info(f"Successfully dispatched Celery task {celery_result.id} for task {task_id}")
+        
+        # Update Redis with Celery task ID
+        if redis_client:
+            metadata_key = f"task:{task_id}"
+            raw_metadata = redis_client.get(metadata_key)
+            if raw_metadata:
+                metadata = json.loads(raw_metadata)
+                metadata["status"] = "PENDING_CELERY_DISPATCH"
+                metadata["celery_task_id"] = celery_result.id
+                metadata["celery_dispatch_time"] = datetime.utcnow().isoformat()
+                redis_client.set(metadata_key, json.dumps(metadata))
+                logger.info(f"Updated Redis metadata for task {task_id} with Celery task ID {celery_result.id}")
+            else:
+                logger.warning(f"No initial metadata found in Redis for task {task_id} during dispatch")
+        
+        return {"task_id": task_id, "celery_task_id": celery_result.id, "status": "DISPATCHED"}
+        
+    except Exception as e:
+        logger.error(f"Failed to dispatch Celery task for {task_id}: {e}", exc_info=True)
+        if redis_client:
+            metadata_key = f"task:{task_id}"
+            raw_metadata = redis_client.get(metadata_key)
+            if raw_metadata:
+                metadata = json.loads(raw_metadata)
+                metadata["status"] = "FAILED"
+                metadata["error_message"] = f"Failed to dispatch Celery task: {str(e)}"
+                metadata["celery_dispatch_time"] = datetime.utcnow().isoformat()
+                redis_client.set(metadata_key, json.dumps(metadata))
+        return {"task_id": task_id, "status": "FAILED", "error": str(e)}
 
 
 @app.post("/transcribe")
@@ -289,25 +379,37 @@ async def transcribe_s3_endpoint(
     request_data: TranscribeS3Request,
     client_id: Optional[str] = Header(None, alias="client_id")
 ):
+    logger.info(f"Received S3 transcription request: client_id={client_id}, s3_key={request_data.s3_key}, s3_path={request_data.s3_path}")
+    
     if not client_id:
         raise HTTPException(status_code=http_status.HTTP_400_BAD_REQUEST, detail="client_id header is required.")
 
     validate_s3_settings(request_data.s3_path)
     
     # Create S3 client for downloading the input file
+    logger.info(f"Creating S3 client for downloading {request_data.s3_key}")
     s3_client = create_s3_client()
     
     task_id = str(uuid.uuid4())
     s3_filename = request_data.s3_key.split("/")[-1] if request_data.s3_key else ""
     safe_filename = sanitize_filename(s3_filename, "s3_audio.wav")
     audio_file_path = os.path.join(CACHE_DIR, f"{task_id}_{safe_filename}")
+    
+    logger.info(f"Generated task_id={task_id}, local_path={audio_file_path}")
 
     try:
         # Download file from S3 to local cache
+        logger.info(f"Downloading S3 file: bucket={S3_STORAGE_BUCKET}, key={request_data.s3_key}, local_path={audio_file_path}")
         s3_client.download_file(S3_STORAGE_BUCKET, request_data.s3_key, audio_file_path)
+        logger.info(f"Successfully downloaded S3 file to {audio_file_path}")
+        
+        # Check file size
+        file_size = os.path.getsize(audio_file_path)
+        logger.info(f"Downloaded file size: {file_size} bytes")
         
         # Validate it's a WAV file by checking extension (basic validation)
         if not request_data.s3_key.lower().endswith('.wav'):
+            logger.warning(f"Invalid file extension for S3 key: {request_data.s3_key}")
             os.remove(audio_file_path)  # Clean up downloaded file
             raise HTTPException(
                 status_code=http_status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, 
@@ -524,6 +626,52 @@ async def get_queue_status():
                 # Optionally count as an error or inconsistent state
     
     return {"active_tasks_in_queue": queued_tasks, "total_tracked_tasks": len(task_keys)}
+
+
+@app.get("/debug/task/{task_id}")
+async def debug_task_info(task_id: str, client_id: Optional[str] = Header(None, alias="client_id")):
+    """Debug endpoint to get detailed task information"""
+    if not redis_client:
+        raise HTTPException(status_code=http_status.HTTP_503_SERVICE_UNAVAILABLE, detail="Redis service not available.")
+    
+    task_key = f"task:{task_id}"
+    raw_metadata = redis_client.get(task_key)
+    if not raw_metadata:
+        raise HTTPException(status_code=http_status.HTTP_404_NOT_FOUND, detail="Task not found.")
+    
+    metadata = json.loads(raw_metadata)
+    
+    # Add Celery task status if available
+    celery_info = {}
+    if CELERY_AVAILABLE and transcribe_audio_task and metadata.get("celery_task_id"):
+        try:
+            from celery.result import AsyncResult
+            celery_result = AsyncResult(metadata["celery_task_id"])
+            celery_info = {
+                "celery_task_id": metadata["celery_task_id"],
+                "celery_status": celery_result.status,
+                "celery_result": str(celery_result.result) if celery_result.result else None,
+                "celery_traceback": celery_result.traceback if celery_result.failed() else None
+            }
+        except Exception as e:
+            celery_info = {"celery_error": str(e)}
+    
+    # Check if file exists
+    file_info = {}
+    if metadata.get("saved_filename"):
+        file_path = os.path.join(CACHE_DIR, metadata["saved_filename"])
+        file_info = {
+            "file_exists": os.path.exists(file_path),
+            "file_size": os.path.getsize(file_path) if os.path.exists(file_path) else None
+        }
+    
+    return {
+        "task_id": task_id,
+        "metadata": metadata,
+        "celery_info": celery_info,
+        "file_info": file_info,
+        "cache_dir": CACHE_DIR
+    }
 
 
 if __name__ == "__main__":
