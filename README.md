@@ -69,7 +69,8 @@ Expected response:
 {
   "fastapi": "ok",
   "redis": "ok", 
-  "ollama": "ok"
+  "ollama": "ok",
+  "celery": "ok"
 }
 ```
 
@@ -214,6 +215,36 @@ Response:
 }
 ```
 
+### Debug Task Issues
+
+Get detailed information about a specific task for troubleshooting:
+
+```bash
+curl -H "client_id: your-client-id" \
+  "http://localhost:8000/debug/task/uuid-task-id"
+```
+
+Response includes:
+```json
+{
+  "task_id": "uuid-task-id",
+  "metadata": {
+    "client_id": "your-client-id",
+    "status": "PROCESSING",
+    "celery_task_id": "celery-uuid",
+    "file_exists": true
+  },
+  "celery_info": {
+    "celery_status": "PENDING",
+    "celery_result": null
+  },
+  "file_info": {
+    "file_exists": true,
+    "file_size": 1048576
+  }
+}
+```
+
 ## Configuration
 
 ### Environment Variables
@@ -282,25 +313,75 @@ Use these for development, testing, and integration planning.
 ### Common Issues
 
 1. **Ollama connection failed**: Ensure Ollama server is running and accessible
-2. **Redis connection failed**: Check Redis container status
+2. **Redis connection failed**: Check Redis container status  
 3. **File upload rejected**: Verify file is WAV format and under 100MB
 4. **S3 upload failed**: Check AWS credentials and bucket permissions
+5. **Task stuck at PENDING_CELERY_DISPATCH**: Celery worker not running or not connected
+6. **Task stuck at PROCESSING**: Check worker logs for transcription errors
 
-### Logs
+### Debug Workflow
 
+For stuck tasks, follow this troubleshooting sequence:
+
+1. **Check overall health**:
+   ```bash
+   curl http://localhost:8000/health
+   ```
+   
+2. **Get detailed task information**:
+   ```bash
+   curl -H "client_id: your-client-id" \
+     "http://localhost:8000/debug/task/your-task-id"
+   ```
+
+3. **Check service logs**:
+   ```bash
+   # View all service logs
+   docker compose logs
+   
+   # View specific service logs with timestamps
+   docker compose logs -t app
+   docker compose logs -t worker
+   docker compose logs -t redis
+   
+   # Follow logs in real-time
+   docker compose logs -f worker
+   ```
+
+4. **Monitor queue status**:
+   ```bash
+   curl "http://localhost:8000/queue"
+   ```
+
+### Status Meanings
+
+- **`PENDING_UPLOADED/DOWNLOADED`**: File received, waiting for Celery dispatch
+- **`PENDING_CELERY_DISPATCH`**: Task sent to Celery, waiting for worker pickup
+- **`PROCESSING`**: Worker is actively transcribing the audio
+- **`COMPLETED`**: Transcription finished successfully
+- **`FAILED`**: Error occurred during processing
+
+### Health Check Statuses
+
+- **`celery: "ok"`**: Workers are active and responding
+- **`celery: "no_workers"`**: No Celery workers found
+- **`celery: "not_imported"`**: Celery task import failed
+- **`celery: "error: ..."`**: Celery inspection error
+
+### Restart Services
+
+If issues persist, restart the services:
 ```bash
-# View all service logs
-docker compose logs
+docker compose down
+docker compose up -d
 
-# View specific service logs
-docker compose logs app
-docker compose logs worker
-docker compose logs redis
+# Watch logs during startup
+docker compose logs -f
 ```
 
-### Health Check
+### Monitor Service Health
 
-Monitor service health:
+Continuously monitor service health:
 ```bash
 watch -n 5 "curl -s http://localhost:8000/health | jq"
 ```
