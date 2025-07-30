@@ -22,6 +22,9 @@ RUN apt-get update && apt-get install -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Disable the very annoying PEP 668 (in a container)
+RUN rm /usr/lib/python3.12/EXTERNALLY-MANAGED
+
 # Install NVIDIA CUDA 12.8 and related libraries
 RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb -o cuda-keyring.deb \
     && dpkg -i cuda-keyring.deb \
@@ -50,8 +53,9 @@ COPY requirements.txt /app/
 # Install Python dependencies
 RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
-# Ensure lzma module is built with _lzma support
-#RUN pip3 install --no-cache-dir --force-reinstall --no-binary :all: lzma
+# Load necessary models
+RUN python3 -m spacy download en_core_web_sm
+
 
 # Copy the transcriber_service package into the container
 COPY ./transcriber_service /app/transcriber_service
