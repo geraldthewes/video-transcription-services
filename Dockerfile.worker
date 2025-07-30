@@ -1,5 +1,45 @@
-# Use an official Python runtime as a parent image
-FROM python:3.12
+
+# Use Ubuntu 24.04 LTS as the base image
+FROM ubuntu:24.04
+
+# Set environment variables to avoid interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Install basic dependencies and tools
+RUN apt-get update && apt-get install -y \
+    git \
+    gcc \
+    g++ \
+    build-essential \
+    liblzma-dev \
+    zlib1g-dev \
+    libbz2-dev \
+    libffi-dev \
+    python3.12 \
+    python3.12-dev \
+    python3-pip \
+    curl \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install NVIDIA CUDA 12.8 and related libraries
+RUN curl -fsSL https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb -o cuda-keyring.deb \
+    && dpkg -i cuda-keyring.deb \
+    && rm cuda-keyring.deb \
+    && apt-get update \
+    && apt-get install -y \
+        cuda-toolkit-12-8 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set environment variables for CUDA
+ENV PATH=/usr/local/cuda-12.8/bin:${PATH}
+ENV LD_LIBRARY_PATH=/usr/local/cuda-12.8/lib64:${LD_LIBRARY_PATH}
+
+# Install cuDNN via pip to provide the required libraries
+RUN pip3 install --no-cache-dir --break-system-packages nvidia-cudnn-cu12==9.1.0.70
+ENV LD_LIBRARY_PATH=${LD_LIBRARY_PATH}:/usr/local/lib/python3.12/dist-packages/nvidia/cudnn/lib/
+
 
 # Set the working directory in the container
 WORKDIR /app
@@ -7,23 +47,14 @@ WORKDIR /app
 # Copy requirements file first for better Docker layer caching
 COPY requirements.txt /app/
 
-# Install any needed packages
-# Keeping dependencies consistent with the main app for shared modules, even if not all are strictly used by the worker.
-RUN pip install --no-cache-dir -r requirements.txt
+# Install Python dependencies
+RUN pip3 install --no-cache-dir --break-system-packages -r requirements.txt
 
-# Copy the local directory contents into the container at /app
-# This will copy the entire transcriber_service package
+# Ensure lzma module is built with _lzma support
+#RUN pip3 install --no-cache-dir --force-reinstall --no-binary :all: lzma
+
+# Copy the transcriber_service package into the container
 COPY ./transcriber_service /app/transcriber_service
 
-
-# Define environment variable for Python path if necessary, though direct app path usually works.
-# ENV PYTHONPATH "${PYTHONPATH}:/app"
-
 # Command to run the Celery worker
-# -A: Application instance
-# worker: The worker subcommand
-# -l: Logging level
-# -P: Concurrency pool (solo is simple, processes one task at a time in the main process)
-# Consider 'gevent' or 'eventlet' for I/O bound tasks if 'solo' is too limiting,
-# but 'solo' is often recommended for CPU-bound or GPU-bound tasks to avoid contention.
 CMD ["celery", "-A", "transcriber_service.tasks.transcription.celery_app", "worker", "-l", "INFO", "-P", "solo"]

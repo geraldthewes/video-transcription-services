@@ -1,4 +1,5 @@
 # Core web framework
+backports.lzma
 fastapi
 uvicorn[standard]
 
