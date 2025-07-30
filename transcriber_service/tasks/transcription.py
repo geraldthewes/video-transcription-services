@@ -271,17 +271,78 @@ def transcribe_audio_task(self, task_id: str, audio_path_in_cache: str, client_i
         # Step 4: Retrieve formatted content
         try:
             logger.info(f"Task {task_id}: Retrieving formatted content")
-            json_content = transcriber.retrieve_json(audio_path_in_cache)
-            md_content = transcriber.retrieve_markdown(audio_path_in_cache)
-            logger.info(f"Task {task_id}: Content retrieval completed. JSON: {type(json_content)}, MD: {type(md_content)}")
+            
+            # Try to retrieve JSON content with detailed error handling
+            try:
+                json_content = transcriber.retrieve_json(audio_path_in_cache)
+                logger.info(f"Task {task_id}: JSON content retrieval completed. Type: {type(json_content)}")
+            except json.JSONDecodeError as json_err:
+                # Check if this is the empty file error (char 0)
+                if "char 0" in str(json_err):
+                    logger.error(f"Task {task_id}: JSON cache file appears to be empty or corrupted. Error: {json_err}")
+                    # Try to find and log the problematic file path
+                    cache_path = getattr(transcriber, '_get_cache_path', lambda x: f"cache for {x}")(audio_path_in_cache)
+                    logger.error(f"Task {task_id}: Problematic JSON cache file likely at: {cache_path}")
+                else:
+                    logger.error(f"Task {task_id}: JSON parsing error: {json_err}")
+                raise ValueError(f"JSON cache file parsing failed - file may be empty or corrupted: {str(json_err)}")
+            except Exception as json_e:
+                logger.error(f"Task {task_id}: Unexpected error during JSON retrieval: {json_e}")
+                raise ValueError(f"JSON content retrieval failed: {str(json_e)}")
+            
+            # Try to retrieve Markdown content with detailed error handling  
+            try:
+                md_content = transcriber.retrieve_markdown(audio_path_in_cache)
+                logger.info(f"Task {task_id}: Markdown content retrieval completed. Type: {type(md_content)}")
+            except json.JSONDecodeError as json_err:
+                # Check if this is the empty file error (char 0)
+                if "char 0" in str(json_err):
+                    logger.error(f"Task {task_id}: Markdown cache file appears to be empty or corrupted. Error: {json_err}")
+                    # Try to find and log the problematic file path
+                    cache_path = getattr(transcriber, '_get_cache_path', lambda x: f"cache for {x}")(audio_path_in_cache)
+                    logger.error(f"Task {task_id}: Problematic Markdown cache file likely at: {cache_path}")
+                else:
+                    logger.error(f"Task {task_id}: Markdown file JSON parsing error: {json_err}")
+                raise ValueError(f"Markdown cache file parsing failed - file may be empty or corrupted: {str(json_err)}")
+            except Exception as md_e:
+                logger.error(f"Task {task_id}: Unexpected error during Markdown retrieval: {md_e}")
+                raise ValueError(f"Markdown content retrieval failed: {str(md_e)}")
             
             if json_content is None:
                 raise ValueError("JSON content retrieval returned None")
             if md_content is None:
                 raise ValueError("Markdown content retrieval returned None")
                 
+            logger.info(f"Task {task_id}: Both JSON and Markdown content successfully retrieved")
+                
         except Exception as e:
             logger.error(f"Task {task_id}: Content retrieval failed: {e}")
+            
+            # Add additional debugging information about cache files
+            try:
+                # Try to inspect the cache directory structure
+                cache_base = os.path.dirname(audio_path_in_cache)
+                cache_files = []
+                if os.path.exists(cache_base):
+                    for root, dirs, files in os.walk(cache_base):
+                        for file in files:
+                            file_path = os.path.join(root, file)
+                            try:
+                                file_size = os.path.getsize(file_path)
+                                cache_files.append(f"{file_path} ({file_size} bytes)")
+                            except OSError:
+                                cache_files.append(f"{file_path} (size unknown)")
+                    
+                    if cache_files:
+                        logger.error(f"Task {task_id}: Cache directory contents: {cache_files}")
+                    else:
+                        logger.error(f"Task {task_id}: Cache directory {cache_base} is empty")
+                else:
+                    logger.error(f"Task {task_id}: Cache directory {cache_base} does not exist")
+                        
+            except Exception as debug_e:
+                logger.error(f"Task {task_id}: Could not gather cache debugging info: {debug_e}")
+            
             raise ValueError(f"Content retrieval failed: {str(e)}")
 
         with open(local_json_path, "w", encoding='utf-8') as f_json:
