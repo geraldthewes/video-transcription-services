@@ -16,5 +16,8 @@ httpx
 # File upload handling
 python-multipart
 
+# Install space now
+spacy
+
 # Transcription engine (from git repository)
 git+https://github.com/geraldthewes/multistep-transcriber.git
