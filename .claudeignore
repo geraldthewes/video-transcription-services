@@ -1,0 +1,45 @@
+# Environment files - contain sensitive credentials
+.env
+.env.local
+.env.*.local
+
+# Cache and temporary files
+cache/
+*.log
+*.tmp
+*.temp
+
+# Python bytecode and artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker build artifacts
+Dockerfile.worker.bad
+
+# Test and coverage files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Git files
+.git/
