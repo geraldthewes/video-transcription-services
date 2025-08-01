@@ -46,10 +46,11 @@ print_success "Service is responding at localhost:8000"
 
 # Check service health
 print_info "Checking service health..."
-HEALTH_STATUS=$(curl -s http://localhost:8000/health | python3 -c "
+HEALTH_RESPONSE=$(curl -s http://localhost:8000/health)
+HEALTH_STATUS=$(echo "$HEALTH_RESPONSE" | python3 -c "
 import sys, json
 try:
-    data = json.load(sys.stdin)
+    data = json.loads(sys.stdin.read())
     print(f\"FastAPI: {data.get('fastapi', 'unknown')}\")
     print(f\"Redis: {data.get('redis', 'unknown')}\")
     print(f\"Ollama: {data.get('ollama', 'unknown')}\")
@@ -60,8 +61,8 @@ try:
         sys.exit(0)
     else:
         sys.exit(1)
-except:
-    print('Health check failed')
+except Exception as e:
+    print(f'Health check failed: {e}')
     sys.exit(1)
 ")
 

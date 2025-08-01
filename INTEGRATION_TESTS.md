@@ -38,18 +38,34 @@ pip install -r requirements-test.txt
 
 ## 🚀 Running Integration Tests
 
-### **Quick Start**
+### **Quick Start (Recommended)**
 ```bash
-# Run all real integration tests
+# ✅ SIMPLEST METHOD - Run direct integration test
+python test_quick_integration.py
+
+# ⚠️ Shell script method (may have pytest import issues)
 ./run_integration_tests.sh
 
 # Or using Make
 make test-real
 ```
 
-### **With Options**
+### **Direct Python Test (Most Reliable)**
 ```bash
-# Verbose output
+# This method always works and shows real-time progress
+python test_quick_integration.py
+
+# What it does:
+# 1. ✅ Tests service health
+# 2. ✅ Uploads 63MB real audio file (test_data/5rmAy8fgYsY_audio.wav)
+# 3. ✅ Monitors transcription progress in real-time
+# 4. ✅ Downloads JSON and Markdown results
+# 5. ✅ Cleans up resources
+```
+
+### **Shell Script Options (If Working)**
+```bash
+# Verbose output (note: correct spelling is --verbose, not --versbose)
 ./run_integration_tests.sh --verbose
 
 # Include slow performance tests
@@ -59,13 +75,14 @@ make test-real
 ./run_integration_tests.sh --help
 ```
 
-### **Direct pytest**
+### **Troubleshooting Shell Script**
+If `./run_integration_tests.sh` fails with pytest import errors:
 ```bash
-# Run specific test file
-pytest tests/integration/test_real_service_integration.py -v
+# Use the direct Python method instead
+python test_quick_integration.py
 
-# Run with markers
-pytest -m "integration and not slow" tests/integration/test_real_service_integration.py -v
+# The shell script has issues with conftest.py imports
+# but the direct Python test bypasses these issues
 ```
 
 ## 🧪 Test Categories
@@ -105,38 +122,39 @@ pytest -m "integration and not slow" tests/integration/test_real_service_integra
 
 ### **Successful Run Example**
 ```bash
-$ ./run_integration_tests.sh --verbose
+$ python test_quick_integration.py
 
-🧪 Video Transcription Service - Integration Test Runner
-================================================================
-ℹ️  Checking if services are running...
-✅ Service is responding at localhost:8000
-ℹ️  Checking service health...
-✅ Service health check passed
-FastAPI: ok
-Redis: ok
-Ollama: ok
-Celery: ok
-✅ Test audio file found: 64M
+🧪 Quick Integration Test - Video Transcription Service
+============================================================
+🎵 Using audio file: test_data/5rmAy8fgYsY_audio.wav (63.1MB)
 
-ℹ️  Running integration tests against localhost:8000...
+1️⃣ Testing service health...
+✅ Service healthy: {'fastapi': 'ok', 'redis': 'ok', 'ollama': 'ok', 'celery': 'ok'}
 
-tests/integration/test_real_service_integration.py::TestRealServiceIntegration::test_service_health_detailed PASSED
-tests/integration/test_real_service_integration.py::TestRealServiceIntegration::test_queue_status PASSED
-tests/integration/test_real_service_integration.py::TestRealServiceIntegration::test_file_upload_transcription_workflow PASSED
-🎵 Testing with real audio file: test_data/5rmAy8fgYsY_audio.wav (63.1MB)
-✅ File uploaded successfully. Task ID: abc-123-def
-⏱️  Task status after 0s: PENDING_CELERY_DISPATCH
-⏱️  Task status after 5s: PROCESSING
-⏱️  Task status after 45s: PROCESSING
-⏱️  Task status after 120s: COMPLETED
-✅ Transcription completed successfully!
-✅ JSON transcription downloaded. Content preview: {"transcript": "Hello world, this is a test transcription..."
-✅ Markdown transcription downloaded. Length: 2048 chars
-✅ Resources cleaned up: {"deleted_cache_files": 3, "redis_key_deleted": true}
+2️⃣ Testing queue status...
+✅ Queue status: {'active_tasks_in_queue': 1, 'total_tracked_tasks': 14}
 
-===== 8 passed in 145.23s =====
-✅ All integration tests passed! 🎉
+3️⃣ Uploading audio file for transcription...
+✅ Upload successful. Task ID: 3551a151-0383-48d1-9ac3-1cb91a26dfbb
+
+4️⃣ Monitoring transcription progress...
+⏱️  Status after 0s: PROCESSING
+⏱️  Status after 10s: PROCESSING
+⏱️  Status after 20s: PROCESSING
+⏱️  Status after 30s: PROCESSING
+⏱️  Status after 40s: PROCESSING
+⏱️  Status after 50s: PROCESSING
+⏱️  Status after 60s: COMPLETED
+✅ Transcription completed!
+
+5️⃣ Downloading transcription results...
+✅ JSON result preview: [{"start": 0.0, "end": 4.5, "transcript": "Prior to coming to Lexington I served as the town manager..."}]
+✅ Markdown result length: 8808 chars
+
+6️⃣ Cleaning up resources...
+✅ Cleanup completed: {'message': 'Task resources release processed.', 'deleted_cache_files': 3, 'files_not_found_in_cache': 0, 'redis_key_deleted': True, 'errors_deleting_files': None}
+
+🎉 All integration tests passed successfully!
 ```
 
 ### **Expected Timings**
