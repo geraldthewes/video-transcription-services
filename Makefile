@@ -1,5 +1,5 @@
 # Video Transcription Service - Makefile
-.PHONY: help install test test-unit test-integration test-coverage clean lint format
+.PHONY: help install test test-unit test-integration test-real-integration test-coverage clean lint format
 
 # Default target
 help:
@@ -11,9 +11,10 @@ help:
 	@echo "  install-test     Install test dependencies"
 	@echo ""
 	@echo "Testing Commands:"
-	@echo "  test             Run all tests with coverage"
-	@echo "  test-unit        Run only unit tests"
-	@echo "  test-integration Run only integration tests"
+	@echo "  test             Run unit tests with coverage"
+	@echo "  test-unit        Run only unit tests (mocked)"
+	@echo "  test-integration Run mock integration tests"
+	@echo "  test-real        Run REAL integration tests (requires services)"
 	@echo "  test-coverage    Run tests and open coverage report"
 	@echo "  test-watch       Run tests in watch mode (requires pytest-watch)"
 	@echo ""
@@ -47,6 +48,9 @@ test-unit:
 
 test-integration:
 	./run_tests.sh --integration
+
+test-real:
+	./run_integration_tests.sh
 
 test-coverage:
 	./run_tests.sh

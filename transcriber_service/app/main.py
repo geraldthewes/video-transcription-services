@@ -607,8 +607,7 @@ async def get_queue_status():
         "RETRYING" # Assuming Celery might set such a state
     ] 
     
-    for task_key_bytes in task_keys: # Iterate over bytes directly
-        task_key = task_key_bytes.decode('utf-8') # Decode here
+    for task_key in task_keys: # Keys are already strings
         raw_metadata = None
         try:
             raw_metadata = redis_client.get(task_key) # Use decoded key
